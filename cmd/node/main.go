@@ -23,7 +23,7 @@ func main() {
 	go RaftNode.Run()
 	router.POST("/append", handler.HandleAppendTransactionReq)
 	router.POST("/heartbeat", handler.HandleHeartBeat)
-	router.POST("/heartbeat", handler.HandleHeartBeat)
+	router.POST("/requestvote", handler.HandleVoteRequest)
 	router.POST("/getuserdetails", handler.GetUserDetails)
 	router.POST("/getalluserdetails", handler.GetAllUserDetails)
 	router.Run(":" + os.Args[2])
