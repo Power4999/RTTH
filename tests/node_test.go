@@ -1,12 +1,11 @@
 package test
 
 import (
-	"RTTH/internal/domain"
 	"testing"
 )
 
 func TestNewNode_Initialization(t *testing.T) {
-	node := domain.NewNode(1, 150)
+	node := newIsolatedNode(t, 1, 150)
 
 	if node.Id != 1 {
 		t.Errorf("expected Node ID 1, got %d", node.Id)

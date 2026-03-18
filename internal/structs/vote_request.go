@@ -7,5 +7,6 @@ type VoteReq struct {
 }
 
 type VoteResp struct {
+	Term        int  `json:"term"`
 	VoteGranted bool `json:"votegranted"`
 }

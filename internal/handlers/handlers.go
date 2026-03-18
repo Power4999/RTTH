@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -48,6 +47,10 @@ func (handler *Handler) HandleAppendTransactionReq(c *gin.Context) {
 		c.JSON(200, "Successfully stored")
 		fmt.Println(handler.Store)
 	case "Follower":
+		if leaderURL == "" {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "leader unknown"})
+			return
+		}
 		c.Redirect(http.StatusTemporaryRedirect, leaderURL+"/append")
 	default:
 		c.JSON(400, gin.H{"error": "Currently in election phase"})
@@ -61,26 +64,8 @@ func (handler *Handler) HandleVoteRequest(c *gin.Context) {
 		return
 	}
 
-	node := handler.RaftNode
-	voteGranted := false
-
-	node.Mu.Lock()
-	if voteReq.Term > node.CurrentTerm {
-		node.CurrentTerm = voteReq.Term
-		node.State = "Follower"
-		node.VotedFor[node.CurrentTerm] = 0
-	}
-	if voteReq.Term == node.CurrentTerm {
-		votedFor := node.VotedFor[node.CurrentTerm]
-		if votedFor == 0 || votedFor == voteReq.CandidateID {
-			voteGranted = true
-			node.VotedFor[node.CurrentTerm] = voteReq.CandidateID
-			node.LastLeaderTimeStamp = time.Now().UnixMilli()
-		}
-	}
-	node.Mu.Unlock()
-
-	c.JSON(200, structs.VoteResp{VoteGranted: voteGranted})
+	resp := handler.RaftNode.ProcessVoteRequest(voteReq)
+	c.JSON(200, resp)
 }
 
 func (handler *Handler) HandleHeartBeat(c *gin.Context) {
@@ -90,13 +75,20 @@ func (handler *Handler) HandleHeartBeat(c *gin.Context) {
 		return
 	}
 
-	node := handler.RaftNode
-	node.Mu.Lock()
-	node.LastLeaderTimeStamp = time.Now().UnixMilli() // use local clock, not leader's
-	node.Mu.Unlock()
+	accepted := handler.RaftNode.ProcessHeartbeat(heartBeat)
+	if !accepted {
+		handler.RaftNode.Mu.Lock()
+		term := handler.RaftNode.CurrentTerm
+		handler.RaftNode.Mu.Unlock()
+		c.JSON(http.StatusOK, structs.HeartBeatResp{Term: term, Success: false})
+		return
+	}
 
 	log.Printf("Received heartbeat from %d with timestamp %d", heartBeat.LeaderID, heartBeat.Timestamp)
-	c.JSON(200, gin.H{"status": "ok"})
+	handler.RaftNode.Mu.Lock()
+	term := handler.RaftNode.CurrentTerm
+	handler.RaftNode.Mu.Unlock()
+	c.JSON(http.StatusOK, structs.HeartBeatResp{Term: term, Success: true})
 }
 
 func (handler *Handler) GetUserDetails(c *gin.Context) {

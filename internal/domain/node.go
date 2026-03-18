@@ -5,12 +5,25 @@ import (
 	"RTTH/internal/structs"
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 )
+
+const (
+	defaultElectionTimeoutMs = 150
+	defaultDataDir           = ".raft"
+)
+
+type persistedState struct {
+	CurrentTerm int `json:"current_term"`
+	VotedFor    int `json:"voted_for"`
+}
 
 type Node struct {
 	Mu sync.Mutex
@@ -23,11 +36,13 @@ type Node struct {
 	LastLeaderTimeStamp int64
 	Timeout             int
 	CurrentTerm         int
-	VotedFor            map[int]int ////map[term]id
+	VotedFor            int
+	rng                 *rand.Rand
+	DataDir             string
 }
 
 func NewNode(id int, timeout int) *Node {
-	return &Node{
+	node := &Node{
 		Id:    id,
 		State: "Follower",
 		Store: store.NewMemoryStore(),
@@ -36,40 +51,106 @@ func NewNode(id int, timeout int) *Node {
 			2: "http://localhost:8081",
 			3: "http://localhost:8082",
 		},
-		LeaderId:            1,
-		LastLeaderTimeStamp: time.Now().UnixMilli() + 2000,
+		LeaderId:            0,
+		LastLeaderTimeStamp: 0,
 		Timeout:             timeout,
-		CurrentTerm:         0, // Change after persistent storage implementation
-		VotedFor:            map[int]int{},
+		CurrentTerm:         0,
+		VotedFor:            0,
+		rng:                 rand.New(rand.NewSource(time.Now().UnixNano() + int64(id))),
+		DataDir:             defaultDataDir,
+	}
+
+	if customDir := os.Getenv("RAFT_DATA_DIR"); customDir != "" {
+		node.DataDir = customDir
+	}
+
+	node.loadState()
+	return node
+}
+
+func (n *Node) stateFilePath() string {
+	return filepath.Join(n.DataDir, "node_"+strconv.Itoa(n.Id)+".json")
+}
+
+func (n *Node) loadState() {
+	if err := os.MkdirAll(n.DataDir, 0o755); err != nil {
+		log.Printf("failed to create raft data directory %s: %v", n.DataDir, err)
+		return
+	}
+
+	statePath := n.stateFilePath()
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("failed to read raft state file %s: %v", statePath, err)
+		}
+		return
+	}
+
+	var st persistedState
+	if err := json.Unmarshal(raw, &st); err != nil {
+		log.Printf("failed to unmarshal raft state for node %d: %v", n.Id, err)
+		return
+	}
+
+	n.CurrentTerm = st.CurrentTerm
+	n.VotedFor = st.VotedFor
+}
+
+func (n *Node) persistStateLocked() {
+	if err := os.MkdirAll(n.DataDir, 0o755); err != nil {
+		log.Printf("failed to create raft data directory %s: %v", n.DataDir, err)
+		return
+	}
+
+	st := persistedState{CurrentTerm: n.CurrentTerm, VotedFor: n.VotedFor}
+	raw, err := json.Marshal(st)
+	if err != nil {
+		log.Printf("failed to marshal raft state for node %d: %v", n.Id, err)
+		return
+	}
+
+	statePath := n.stateFilePath()
+	if err := os.WriteFile(statePath, raw, 0o644); err != nil {
+		log.Printf("failed to persist raft state for node %d: %v", n.Id, err)
 	}
 }
 
-// RACE COND 1 (ADD MUTEX LOCK)
+func (n *Node) electionTimeoutMsLocked() int64 {
+	timeout := n.Timeout
+	if timeout <= 0 {
+		timeout = defaultElectionTimeoutMs
+	}
+	// Randomized timeout in [timeout, 2*timeout] reduces split votes.
+	return int64(timeout + n.rng.Intn(timeout+1))
+}
+
+func (n *Node) resetElectionTimerLocked() {
+	n.LastLeaderTimeStamp = time.Now().UnixMilli() + n.electionTimeoutMsLocked()
+}
+
 func (n *Node) Run() {
 
 	n.Mu.Lock()
 	delete(n.OtherNodes, n.Id)
-	if n.LeaderId == n.Id {
-		n.State = "Leader"
-	}
+	n.State = "Follower"
+	n.LeaderId = 0
+	n.resetElectionTimerLocked()
 	n.Mu.Unlock()
 
 	for {
 		n.Mu.Lock()
 		state := n.State
-		lastLeader := n.LastLeaderTimeStamp
-		timeout := n.Timeout
+		electionDeadline := n.LastLeaderTimeStamp
 		n.Mu.Unlock()
 
 		switch state {
 		case "Leader":
 			time.Sleep(100 * time.Millisecond)
 			n.SendHeartBeat()
-		case "Follower":
-			time.Sleep(50 * time.Millisecond)
-			if time.Now().UnixMilli()-lastLeader > int64(timeout) {
-				// start election
-				log.Println("Election needs to be started")
+		case "Follower", "Candidate":
+			time.Sleep(25 * time.Millisecond)
+			if time.Now().UnixMilli() >= electionDeadline {
 				n.StartElection()
 			}
 		}
@@ -80,7 +161,12 @@ func (n *Node) Run() {
 func (nodes *Node) SendHeartBeat() {
 
 	nodes.Mu.Lock()
+	if nodes.State != "Leader" {
+		nodes.Mu.Unlock()
+		return
+	}
 	id := nodes.Id
+	term := nodes.CurrentTerm
 	var peerURLs []string
 	for _, url := range nodes.OtherNodes {
 		peerURLs = append(peerURLs, url)
@@ -90,12 +176,13 @@ func (nodes *Node) SendHeartBeat() {
 
 	heartbeatMsg := structs.HeartBeat{
 		LeaderID:  id,
+		Term:      term,
 		Heartbeat: '@',
 		Timestamp: time.Now().UnixMilli(),
 	}
 	jsonData, err := json.Marshal(heartbeatMsg)
 	if err != nil {
-		fmt.Println(err)
+		log.Println("failed to marshal heartbeat:", err)
 		return
 	}
 	// timeout
@@ -103,27 +190,44 @@ func (nodes *Node) SendHeartBeat() {
 
 	for _, targetURL := range peerURLs {
 		go func(url string) {
-			resp, err := client.Post(url+"/heartbeat", "application/json", bytes.NewBuffer(jsonData)) /////replace http.post with controlled mechanism
+			resp, err := client.Post(url+"/heartbeat", "application/json", bytes.NewBuffer(jsonData))
 			if err != nil {
-				//fmt.Println(err)
 				return
 			}
-			//log.Printf("Heartbeat sent to %s at timestamp %d\n",url, heartbeatMsg.Timestamp)
 			defer resp.Body.Close()
+
+			var hbResp structs.HeartBeatResp
+			if err := json.NewDecoder(resp.Body).Decode(&hbResp); err != nil {
+				return
+			}
+
+			nodes.Mu.Lock()
+			defer nodes.Mu.Unlock()
+			if hbResp.Term > nodes.CurrentTerm {
+				nodes.CurrentTerm = hbResp.Term
+				nodes.State = "Follower"
+				nodes.VotedFor = 0
+				nodes.LeaderId = 0
+				nodes.resetElectionTimerLocked()
+				nodes.persistStateLocked()
+			}
 		}(targetURL)
 	}
 }
 
-// major change
 func (node *Node) StartElection() {
-
 	node.Mu.Lock()
+	if node.State == "Leader" {
+		node.Mu.Unlock()
+		return
+	}
 
-	fmt.Println("Election started")
 	node.State = "Candidate"
 	node.CurrentTerm++
-	node.LastLeaderTimeStamp = time.Now().UnixMilli()
-	node.VotedFor[node.CurrentTerm] = node.Id
+	node.resetElectionTimerLocked()
+	node.VotedFor = node.Id
+	node.LeaderId = 0
+	node.persistStateLocked()
 
 	term := node.CurrentTerm
 	id := node.Id
@@ -139,56 +243,128 @@ func (node *Node) StartElection() {
 	voteReq := structs.VoteReq{
 		Term:        term,
 		CandidateID: id,
+		Timestamp:   time.Now().UnixMilli(),
 	}
-	jsonData, _ := json.Marshal(voteReq)
+	jsonData, err := json.Marshal(voteReq)
+	if err != nil {
+		log.Println("failed to marshal vote request:", err)
+		return
+	}
 
-	voteCh := make(chan bool, len(peerURLs))
+	voteCh := make(chan structs.VoteResp, len(peerURLs))
 
-	// add timeout
 	client := &http.Client{Timeout: 200 * time.Millisecond}
 
 	for _, peer := range peerURLs {
 		go func(url string) {
 			resp, err := client.Post(url+"/requestvote", "application/json", bytes.NewBuffer(jsonData))
 			if err != nil {
-				log.Println("Vote request failed:", err)
-				voteCh <- false
+				voteCh <- structs.VoteResp{Term: term, VoteGranted: false}
 				return
 			}
 			defer resp.Body.Close()
 
 			var voteResp structs.VoteResp
 			if err := json.NewDecoder(resp.Body).Decode(&voteResp); err != nil {
-				log.Println("Failed to decode vote response:", err)
-				voteCh <- false
+				voteCh <- structs.VoteResp{Term: term, VoteGranted: false}
 				return
 			}
-			voteCh <- voteResp.VoteGranted
+			voteCh <- voteResp
 		}(peer)
 	}
+
+	becameLeader := false
+
 	for i := 0; i < len(peerURLs); i++ {
-		granted := <-voteCh
-		if granted {
-			log.Println("Vote granted")
+		voteResp := <-voteCh
+
+		node.Mu.Lock()
+		if voteResp.Term > node.CurrentTerm {
+			node.CurrentTerm = voteResp.Term
+			node.State = "Follower"
+			node.VotedFor = 0
+			node.LeaderId = 0
+			node.resetElectionTimerLocked()
+			node.persistStateLocked()
+			node.Mu.Unlock()
+			return
+		}
+		if node.State != "Candidate" || node.CurrentTerm != term {
+			node.Mu.Unlock()
+			return
+		}
+
+		if voteResp.VoteGranted {
 			votesReceived++
 		}
 
-		node.Mu.Lock()
-		if votesReceived >= requiredVotes && node.State == "Candidate" {
+		if votesReceived >= requiredVotes && !becameLeader {
 			node.State = "Leader"
 			node.LeaderId = node.Id
-			node.Mu.Unlock()
-
-			log.Println("Quorum reached! Became Leader for term", term)
-			node.SendHeartBeat()
-			return
+			becameLeader = true
 		}
 		node.Mu.Unlock()
 	}
+
+	if becameLeader {
+		node.SendHeartBeat()
+		return
+	}
+
 	node.Mu.Lock()
-	if node.State == "Candidate" {
+	if node.State == "Candidate" && node.CurrentTerm == term {
 		node.State = "Follower"
+		node.LeaderId = 0
+		node.resetElectionTimerLocked()
 	}
 	node.Mu.Unlock()
-	log.Println("Election failed to reach quorum.")
+}
+
+func (n *Node) ProcessVoteRequest(voteReq structs.VoteReq) structs.VoteResp {
+	voteGranted := false
+
+	n.Mu.Lock()
+	defer n.Mu.Unlock()
+
+	if voteReq.Term < n.CurrentTerm {
+		return structs.VoteResp{Term: n.CurrentTerm, VoteGranted: false}
+	}
+
+	if voteReq.Term > n.CurrentTerm {
+		n.CurrentTerm = voteReq.Term
+		n.State = "Follower"
+		n.VotedFor = 0
+		n.LeaderId = 0
+		n.persistStateLocked()
+	}
+
+	votedFor := n.VotedFor
+	if votedFor == 0 || votedFor == voteReq.CandidateID {
+		voteGranted = true
+		n.VotedFor = voteReq.CandidateID
+		n.resetElectionTimerLocked()
+		n.persistStateLocked()
+	}
+
+	return structs.VoteResp{Term: n.CurrentTerm, VoteGranted: voteGranted}
+}
+
+func (n *Node) ProcessHeartbeat(heartbeat structs.HeartBeat) bool {
+	n.Mu.Lock()
+	defer n.Mu.Unlock()
+
+	if heartbeat.Term < n.CurrentTerm {
+		return false
+	}
+
+	if heartbeat.Term > n.CurrentTerm {
+		n.CurrentTerm = heartbeat.Term
+		n.VotedFor = 0
+		n.persistStateLocked()
+	}
+
+	n.State = "Follower"
+	n.LeaderId = heartbeat.LeaderID
+	n.resetElectionTimerLocked()
+	return true
 }
