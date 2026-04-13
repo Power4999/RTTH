@@ -19,6 +19,7 @@ type MemoryStore struct {
 	nextIndex int
 }
 
+// NewMemoryStore performs in-memory log store initialization and returns a ready-to-use store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		data:      make(map[int]structs.Transaction),
@@ -26,6 +27,7 @@ func NewMemoryStore() *MemoryStore {
 	}
 }
 
+// Append performs transaction insertion and returns an error when insertion fails.
 func (m *MemoryStore) Append(t structs.Transaction) error {
 	m.Mu.Lock()
 	defer m.Mu.Unlock()
@@ -35,6 +37,7 @@ func (m *MemoryStore) Append(t structs.Transaction) error {
 	return nil
 }
 
+// GetByID performs lookup by index and returns the matching transaction.
 func (m *MemoryStore) GetByID(id int) (structs.Transaction, error) {
 	m.Mu.RLock()
 	defer m.Mu.RUnlock()
@@ -45,6 +48,7 @@ func (m *MemoryStore) GetByID(id int) (structs.Transaction, error) {
 	return t, nil
 }
 
+// GetAll performs a snapshot copy of all transactions and returns the copied map.
 func (m *MemoryStore) GetAll() map[int]structs.Transaction {
 	m.Mu.RLock()
 	defer m.Mu.RUnlock()

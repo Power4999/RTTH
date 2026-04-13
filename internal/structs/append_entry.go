@@ -5,7 +5,7 @@ type AppendEntriesReq struct {
 	LeaderID     int           `json:"leaderid"`
 	PrevLogIndex int           `json:"prevlogindex"`
 	PrevLogTerm  int           `json:"prevlogterm"`
-	Entries      []Transaction `json:"entries"` 
+	Entries      []Transaction `json:"entries"`
 	LeaderCommit int           `json:"leadercommit"`
 }
 

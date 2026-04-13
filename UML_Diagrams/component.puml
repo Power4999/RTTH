@@ -18,11 +18,9 @@ skinparam package {
     BorderColor Black
 }
 
-' ── External Actors ───────────────────────────────────────────────────────────
 component "Client CLI\n(cmd/client/main.go)" as Client
 component "first_blockchain.txt\n(genesis seed)" as GenesisFile
 
-' ── Channel Proxy ─────────────────────────────────────────────────────────────
 component "Channel Proxy\n(cmd/channel/main.go)\n:9000" as Channel {
     port "POST /forward/:nodeID/*path" as FwdPort
     port "POST /admin/partition"       as AdminPort
@@ -30,7 +28,6 @@ component "Channel Proxy\n(cmd/channel/main.go)\n:9000" as Channel {
     component "Random Jitter\n(5–30 ms)"           as Jitter
 }
 
-' ── RAFT Node (one instance, replicated ×3) ───────────────────────────────────
 component "RAFT Node\n(cmd/server/main.go)\n:8081 / :8082 / :8083" as NodeProc {
 
     port ":808x HTTP"      as NodePort
@@ -63,35 +60,27 @@ component "RAFT Node\n(cmd/server/main.go)\n:8081 / :8082 / :8083" as NodeProc {
     interface "BlockchainOps" as IBCOps
 }
 
-' ── Wiring: external to channel ──────────────────────────────────────────────
 Client      ..>  FwdPort   : HTTP/JSON\nPOST /forward/N/transfer
 Client      ..>  AdminPort : partition control
 
-' ── Wiring: channel to node ──────────────────────────────────────────────────
 FwdPort   ..>  NodePort : proxied HTTP\n(gate + jitter)
 GateCtrl   --  Jitter
 
-' ── Wiring: router → handler ─────────────────────────────────────────────────
 NodePort  --   Router
 Router    ..>  HandlerComp
 
-' ── Wiring: handler → domain ─────────────────────────────────────────────────
 HandlerComp --( ILogStore
 ILogStore   --  StoreComp
 HandlerComp ..> DomainComp
 
-' ── Wiring: domain → blockchain ──────────────────────────────────────────────
 DomainComp  --( IBCOps
 IBCOps      --  BCComp
 
-' ── Wiring: domain → persist ─────────────────────────────────────────────────
 DomainComp  ..>  DiskPort
 DiskPort    --   PersistComp
 
-' ── Wiring: genesis seed ─────────────────────────────────────────────────────
 GenesisFile ..>  BCComp : LoadFirstBlockchain\n(first boot only)
 
-' ── Peer RPC: node → channel → node ─────────────────────────────────────────
 Replication ..>  FwdPort : AppendEntries RPC\n(X-Sender-ID header)
 Election    ..>  FwdPort : RequestVote RPC
 

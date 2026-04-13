@@ -1,14 +1,3 @@
-// Package integration contains end-to-end RAFT tests that wire multiple
-// domain.Node instances together in-process using httptest servers.
-//
-// Tests here use real HTTP round-trips through Gin routers so the full
-// handler/domain stack is exercised.  No external processes or ports are
-// required — httptest.NewServer picks an available port on the loopback.
-//
-// Run with:
-//
-//	go test ./test/integration/... -v -timeout 60s
-//	go test ./test/integration/... -v -timeout 60s -run TestRaft_LeaderElection
 package integration
 
 import (
@@ -27,16 +16,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ── Test cluster helpers ──────────────────────────────────────────────────────
-
-// testCluster is a three-node RAFT cluster running on httptest servers.
 type testCluster struct {
 	nodes   []*domain.Node
 	servers []*httptest.Server
 }
 
-// newCluster creates and starts three nodes, wiring each node's OtherNodes to
-// point at the other two test servers.
 func newCluster(t *testing.T) *testCluster {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -46,7 +30,6 @@ func newCluster(t *testing.T) *testCluster {
 		servers: make([]*httptest.Server, 3),
 	}
 
-	// Create nodes first (servers are assigned after).
 	for i := 0; i < 3; i++ {
 		node, err := domain.NewNode(i+1, 300, t.TempDir())
 		if err != nil {
@@ -55,7 +38,6 @@ func newCluster(t *testing.T) *testCluster {
 		c.nodes[i] = node
 	}
 
-	// Create servers.
 	for i, node := range c.nodes {
 		h := handlers.NewHandler(store.NewMemoryStore(), node)
 		r := gin.New()
@@ -71,8 +53,6 @@ func newCluster(t *testing.T) *testCluster {
 		t.Cleanup(srv.Close)
 	}
 
-	// Wire OtherNodes to point at the test server URLs.
-	// Also remove self from OtherNodes (mirrors what Run() does).
 	for i, node := range c.nodes {
 		node.Mu.Lock()
 		node.OtherNodes = make(map[int]string)
@@ -87,9 +67,6 @@ func newCluster(t *testing.T) *testCluster {
 	return c
 }
 
-// forceLeader manually promotes node at index idx to Leader and initialises
-// its leader state.  Other nodes remain Followers.  This avoids relying on
-// randomized election timeouts in tests.
 func (c *testCluster) forceLeader(idx int) {
 	for i, node := range c.nodes {
 		node.Mu.Lock()
@@ -106,7 +83,6 @@ func (c *testCluster) forceLeader(idx int) {
 	}
 }
 
-// leaderNode returns the node currently in the "Leader" state, or nil.
 func (c *testCluster) leaderNode() *domain.Node {
 	for _, n := range c.nodes {
 		n.Mu.Lock()
@@ -119,16 +95,11 @@ func (c *testCluster) leaderNode() *domain.Node {
 	return nil
 }
 
-// doPost is a simple HTTP POST helper for integration tests.
 func doPost(url string, body interface{}) (*http.Response, error) {
 	data, _ := json.Marshal(body)
 	return http.Post(url, "application/json", bytes.NewReader(data))
 }
 
-// ── TC_INT_001 ────────────────────────────────────────────────────────────────
-
-// TC_INT_001 — A forced-leader node accepts AppendEntries heartbeats from itself
-// and returns success=true to followers.
 func TestRaft_HeartbeatFromLeader(t *testing.T) {
 	c := newCluster(t)
 	c.forceLeader(0)
@@ -141,7 +112,6 @@ func TestRaft_HeartbeatFromLeader(t *testing.T) {
 	leaderID := leader.Id
 	leader.Mu.Unlock()
 
-	// Send a heartbeat directly to the follower server.
 	followerURL := c.servers[1].URL
 	reqBody := structs.AppendEntriesReq{
 		Term:         leaderTerm,
@@ -174,10 +144,6 @@ func TestRaft_HeartbeatFromLeader(t *testing.T) {
 	}
 }
 
-// ── TC_INT_002 ────────────────────────────────────────────────────────────────
-
-// TC_INT_002 — Log entry written to leader is replicated to follower via
-// AppendEntries (single manual replication round-trip).
 func TestRaft_LogReplication_SingleEntry(t *testing.T) {
 	c := newCluster(t)
 	c.forceLeader(0)
@@ -189,7 +155,6 @@ func TestRaft_LogReplication_SingleEntry(t *testing.T) {
 	})
 	leader.Mu.Unlock()
 
-	// Send AppendEntries with the new entry to follower 2 (server index 1).
 	followerURL := c.servers[1].URL
 	reqBody := structs.AppendEntriesReq{
 		Term:     1,
@@ -220,17 +185,13 @@ func TestRaft_LogReplication_SingleEntry(t *testing.T) {
 	}
 }
 
-// ── TC_INT_003 ────────────────────────────────────────────────────────────────
-
-// TC_INT_003 — A node receiving a vote request in a higher term steps down from
-// Leader to Follower and grants the vote.
 func TestRaft_VoteRequest_CausesStepDown(t *testing.T) {
 	c := newCluster(t)
-	c.forceLeader(0) // node 0 is leader in term 1
+	c.forceLeader(0)
 
 	leaderURL := c.servers[0].URL
 	voteReq := structs.VoteReq{
-		Term:         5, // much higher term
+		Term:         5,
 		CandidateID:  2,
 		LastLogIndex: 0,
 		LastLogTerm:  0,
@@ -257,23 +218,18 @@ func TestRaft_VoteRequest_CausesStepDown(t *testing.T) {
 	}
 }
 
-// ── TC_INT_004 ────────────────────────────────────────────────────────────────
-
-// TC_INT_004 — Commit propagation: after entries are replicated to all nodes
-// and the leader advances CommitIndex, all nodes eventually apply the entry.
 func TestRaft_CommitPropagation(t *testing.T) {
 	c := newCluster(t)
 	c.forceLeader(0)
 
 	entry := structs.Transaction{ClientID: 1, Payload: "2 100", Term: 1}
 
-	// Replicate entry to all followers.
 	for i := 1; i < 3; i++ {
 		reqBody := structs.AppendEntriesReq{
 			Term:         1,
 			LeaderID:     c.nodes[0].Id,
 			Entries:      []structs.Transaction{entry},
-			LeaderCommit: 0, // not yet committed
+			LeaderCommit: 0,
 		}
 		resp, err := doPost(c.servers[i].URL+"/appendentries", reqBody)
 		if err != nil {
@@ -282,7 +238,6 @@ func TestRaft_CommitPropagation(t *testing.T) {
 		resp.Body.Close()
 	}
 
-	// Now send LeaderCommit=1 to advance CommitIndex.
 	for i := 1; i < 3; i++ {
 		reqBody := structs.AppendEntriesReq{
 			Term:         1,
@@ -297,7 +252,6 @@ func TestRaft_CommitPropagation(t *testing.T) {
 		resp.Body.Close()
 	}
 
-	// Verify each follower has CommitIndex=1 and LastApplied=1.
 	for i := 1; i < 3; i++ {
 		c.nodes[i].Mu.Lock()
 		ci := c.nodes[i].CommitIndex
@@ -313,17 +267,12 @@ func TestRaft_CommitPropagation(t *testing.T) {
 	}
 }
 
-// ── TC_INT_005 ────────────────────────────────────────────────────────────────
-
-// TC_INT_005 — A follower with a stale log rejects an AppendEntries with a
-// PrevLogTerm mismatch, then accepts a corrected retry.
 func TestRaft_LogConflict_RetrySucceeds(t *testing.T) {
 	c := newCluster(t)
 	c.forceLeader(0)
 
 	followerURL := c.servers[1].URL
 
-	// Manually give the follower a conflicting log entry at term 1.
 	c.nodes[1].Mu.Lock()
 	c.nodes[1].Log = append(c.nodes[1].Log, structs.Transaction{
 		ClientID: 9, Payload: "stale", Term: 1,
@@ -331,7 +280,6 @@ func TestRaft_LogConflict_RetrySucceeds(t *testing.T) {
 	c.nodes[1].CurrentTerm = 1
 	c.nodes[1].Mu.Unlock()
 
-	// Leader sends entry at term 2 claiming PrevLogTerm=2 at index 1 — mismatch.
 	badReq := structs.AppendEntriesReq{
 		Term: 2, LeaderID: c.nodes[0].Id,
 		PrevLogIndex: 1, PrevLogTerm: 2,
@@ -346,7 +294,6 @@ func TestRaft_LogConflict_RetrySucceeds(t *testing.T) {
 		t.Error("want success=false on PrevLogTerm mismatch")
 	}
 
-	// Corrected retry: leader backs up to PrevLogIndex=0 and resends.
 	goodReq := structs.AppendEntriesReq{
 		Term: 2, LeaderID: c.nodes[0].Id,
 		PrevLogIndex: 0, PrevLogTerm: 0,
@@ -374,21 +321,13 @@ func TestRaft_LogConflict_RetrySucceeds(t *testing.T) {
 	}
 }
 
-// ── TC_INT_006 ────────────────────────────────────────────────────────────────
-
-// TC_INT_006 — Three nodes each start as Followers; only one may win an
-// election given the topology wired above.  We use StartElection directly to
-// avoid sleeping through real timeouts.
 func TestRaft_Election_OneLeaderElected(t *testing.T) {
 	c := newCluster(t)
 
-	// Node 1 starts an election.  It will request votes from the other two
-	// nodes, which are Followers with no prior votes.
 	c.nodes[0].Mu.Lock()
 	c.nodes[0].CurrentTerm = 0
 	c.nodes[0].Mu.Unlock()
 
-	// Run election in a goroutine; give it 2 s to complete.
 	done := make(chan struct{})
 	go func() {
 		c.nodes[0].StartElection()
@@ -401,7 +340,6 @@ func TestRaft_Election_OneLeaderElected(t *testing.T) {
 		t.Fatal("election did not complete within 2 s")
 	}
 
-	// Exactly one Leader must exist.
 	leaders := 0
 	for _, n := range c.nodes {
 		n.Mu.Lock()
@@ -414,7 +352,6 @@ func TestRaft_Election_OneLeaderElected(t *testing.T) {
 		t.Errorf("want exactly 1 leader after election, got %d", leaders)
 	}
 
-	// All nodes must agree on the same term.
 	terms := make([]int, 3)
 	for i, n := range c.nodes {
 		n.Mu.Lock()

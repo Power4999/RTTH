@@ -10,21 +10,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Handler wires together the in-memory log store and the RAFT node.
 type Handler struct {
 	Store    store.LogStore
 	RaftNode *domain.Node
 }
 
-// NewHandler creates a Handler.
+// NewHandler performs handler wiring and returns a handler bound to store and RAFT node.
 func NewHandler(s store.LogStore, n *domain.Node) *Handler {
 	return &Handler{Store: s, RaftNode: n}
 }
 
-// ── Legacy /append endpoint ───────────────────────────────────────────────────
-// Kept for backward-compatibility with existing tests.  The in-memory store
-// is written directly; for fully replicated transfers use /transfer instead.
-
+// HandleAppendTransactionReq performs legacy append request handling and returns an HTTP response.
 func (h *Handler) HandleAppendTransactionReq(c *gin.Context) {
 	node := h.RaftNode
 	var txn structs.ClientTransaction
@@ -67,9 +63,7 @@ func (h *Handler) HandleAppendTransactionReq(c *gin.Context) {
 	}
 }
 
-// ── RAFT RPCs ─────────────────────────────────────────────────────────────────
-
-// HandleVoteRequest processes a RequestVote RPC.
+// HandleVoteRequest performs RAFT vote request handling and returns an HTTP response.
 func (h *Handler) HandleVoteRequest(c *gin.Context) {
 	var req structs.VoteReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -84,7 +78,7 @@ func (h *Handler) HandleVoteRequest(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// HandleAppendEntries processes an AppendEntries RPC (heartbeat or replication).
+// HandleAppendEntries performs RAFT append entries handling and returns an HTTP response.
 func (h *Handler) HandleAppendEntries(c *gin.Context) {
 	var req structs.AppendEntriesReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -99,9 +93,7 @@ func (h *Handler) HandleAppendEntries(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// ── Legacy store-based read endpoints ────────────────────────────────────────
-
-// GetUserDetails looks up a transaction in the in-memory store by log index.
+// GetUserDetails performs transaction lookup by client ID and returns an HTTP response.
 func (h *Handler) GetUserDetails(c *gin.Context) {
 	var req structs.GetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -120,16 +112,12 @@ func (h *Handler) GetUserDetails(c *gin.Context) {
 	c.JSON(http.StatusOK, txn)
 }
 
-// GetAllUserDetails returns the entire in-memory store keyed by log index.
+// GetAllUserDetails performs retrieval of all stored transactions and returns an HTTP response.
 func (h *Handler) GetAllUserDetails(c *gin.Context) {
 	c.JSON(http.StatusOK, h.Store.GetAll())
 }
 
-// ── Banking endpoints (RAFT-replicated) ──────────────────────────────────────
-
-// HandleTransfer accepts a banking transfer, appends it to the RAFT log on the
-// leader, waits up to 3 s for a majority commit, and returns the new balances.
-// Followers redirect the client to the current leader.
+// HandleTransfer performs transfer submission through RAFT and returns commit and balance results.
 func (h *Handler) HandleTransfer(c *gin.Context) {
 	var txn structs.ClientTransaction
 	if err := c.ShouldBindJSON(&txn); err != nil {
@@ -174,8 +162,7 @@ func (h *Handler) HandleTransfer(c *gin.Context) {
 	}
 }
 
-// HandleBalance returns the committed and pending balance for a client.
-// This is a read-only operation served by any node.
+// HandleBalance performs balance lookup for a client and returns committed and pending values.
 func (h *Handler) HandleBalance(c *gin.Context) {
 	var req structs.GetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -194,7 +181,7 @@ func (h *Handler) HandleBalance(c *gin.Context) {
 	})
 }
 
-// HandleGetBlockchain returns a snapshot of the node's current blockchain.
+// HandleGetBlockchain performs blockchain snapshot retrieval and returns the current chain.
 func (h *Handler) HandleGetBlockchain(c *gin.Context) {
 	c.JSON(http.StatusOK, h.RaftNode.GetBlockchain())
 }

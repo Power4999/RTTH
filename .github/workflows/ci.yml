@@ -35,7 +35,6 @@ jobs:
           version: "latest"
           install-go: false
 
-  # Unit tests
   unit:
     name: Unit Tests
     runs-on: ubuntu-latest
@@ -73,7 +72,6 @@ jobs:
           path: coverage.out
           retention-days: 3
 
-  #Integration tests
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
@@ -93,7 +91,6 @@ jobs:
           go test -race -count=1 -timeout=120s -v \
             ./test/integration/...
 
-  #Coverage gate
   coverage:
     name: Coverage Gate
     runs-on: ubuntu-latest
@@ -132,7 +129,6 @@ jobs:
           path: coverage.html
           retention-days: 7
 
-  #Build check
   build:
     name: Build
     runs-on: ubuntu-latest

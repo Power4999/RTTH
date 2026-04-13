@@ -11,6 +11,7 @@ type ClientTransaction struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
+// Validate performs client transaction validation and returns an error when validation fails.
 func (t *ClientTransaction) Validate() error {
 	if t.ClientID == 0 {
 		return errors.New("transaction ID is required")

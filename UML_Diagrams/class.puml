@@ -9,7 +9,6 @@ skinparam class {
 skinparam linetype ortho
 skinparam packageStyle rectangle
 
-' ── Structs package ──────────────────────────────────────────────────────────
 package "structs" {
     class Transaction {
         +ID        : int
@@ -68,7 +67,6 @@ package "structs" {
     }
 }
 
-' ── Store package ─────────────────────────────────────────────────────────────
 package "store" {
     interface LogStore {
         +Append(t: Transaction) : error
@@ -86,7 +84,6 @@ package "store" {
     }
 }
 
-' ── Persist package ───────────────────────────────────────────────────────────
 package "persist" {
     class State {
         +CurrentTerm : int
@@ -104,7 +101,6 @@ package "persist" {
     }
 }
 
-' ── Domain package ────────────────────────────────────────────────────────────
 package "domain" {
     class Node {
         +Id                  : int
@@ -141,7 +137,6 @@ package "domain" {
     }
 }
 
-' ── Handlers package ──────────────────────────────────────────────────────────
 package "handlers" {
     class Handler {
         +Store    : LogStore
@@ -159,7 +154,6 @@ package "handlers" {
     }
 }
 
-' ── Blockchain package ────────────────────────────────────────────────────────
 package "blockchain" {
     class BlockchainService <<utility>> {
         {static} +BuildBlock(chain, txns, term) : Block
@@ -173,7 +167,6 @@ package "blockchain" {
     }
 }
 
-' ── Relationships ─────────────────────────────────────────────────────────────
 MemoryStore    ..|>  LogStore
 Block          "1" *-- "1..*" Transaction
 State          *--  Block

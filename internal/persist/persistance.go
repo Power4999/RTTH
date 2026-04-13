@@ -8,32 +8,29 @@ import (
 	"path/filepath"
 )
 
-// State is everything that must survive a node crash.
 type State struct {
 	CurrentTerm int                   `json:"current_term"`
-	VotedFor    map[int]int           `json:"voted_for"`    // map[term]candidateId
+	VotedFor    map[int]int           `json:"voted_for"`
 	Log         []structs.Transaction `json:"log"`
-	Blockchain  []structs.Block       `json:"blockchain"`   // mined, committed blocks
-	BlockBuffer []structs.Transaction `json:"block_buffer"` // committed txns waiting to fill next block
+	Blockchain  []structs.Block       `json:"blockchain"`
+	BlockBuffer []structs.Transaction `json:"block_buffer"`
 }
 
-// Storage wraps the per-node state file.
 type Storage struct {
 	path string
 }
 
-// NewStorage creates the dataDir if required and returns a Storage bound to
-// the node-specific file inside it.
-func NewStorage(dataDir string, nodeId int) (*Storage, error) {
+// NewStorage performs per-node storage initialization and returns a storage handle.
+func NewStorage(dataDir string, nodeID int) (*Storage, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("persist: cannot create data dir %s: %w", dataDir, err)
 	}
 	return &Storage{
-		path: filepath.Join(dataDir, fmt.Sprintf("node_%d_state.json", nodeId)),
+		path: filepath.Join(dataDir, fmt.Sprintf("node_%d_state.json", nodeID)),
 	}, nil
 }
 
-// Save atomically overwrites the state file via a temp-file + rename.
+// Save performs atomic state persistence and returns an error when writing fails.
 func (s *Storage) Save(state State) error {
 	data, err := json.Marshal(state)
 	if err != nil {
@@ -49,9 +46,7 @@ func (s *Storage) Save(state State) error {
 	return nil
 }
 
-// Load reads and deserialises the state file.  On first boot (no file) it
-// returns safe zero values.  Nil maps and slices are always initialised to
-// empty non-nil values so callers need no extra nil-guards.
+// Load performs state restoration from disk and returns the recovered state.
 func (s *Storage) Load() (State, error) {
 	data, err := os.ReadFile(s.path)
 	if os.IsNotExist(err) {
@@ -70,7 +65,7 @@ func (s *Storage) Load() (State, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return State{}, fmt.Errorf("persist: unmarshal failed: %w", err)
 	}
-	// Guard against older serialisation formats that omitted these fields.
+
 	if state.VotedFor == nil {
 		state.VotedFor = map[int]int{}
 	}

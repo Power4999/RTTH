@@ -1,11 +1,3 @@
-// cmd/client/main.go
-//
-// Interactive banking client for the RTTH distributed ledger.
-//
-// Usage: go run cmd/client/main.go [clientID]
-//
-// All requests are routed through the channel proxy so partition rules apply.
-// When a node returns 307, the client retries the leader directly.
 package main
 
 import (
@@ -21,17 +13,13 @@ import (
 	"time"
 )
 
-// channelBase is the channel proxy URL prefix.
 const channelBase = "http://localhost:9000/forward"
 
-// nodeURLs maps node ID to its channel-proxied base URL.
 var nodeURLs = map[int]string{
 	1: channelBase + "/1",
 	2: channelBase + "/2",
 	3: channelBase + "/3",
 }
-
-// ─── Request / response types ─────────────────────────────────────────────────
 
 type transferReq struct {
 	ClientID  int    `json:"clientid"`
@@ -43,12 +31,8 @@ type balanceReq struct {
 	ClientID int `json:"clientid"`
 }
 
-// ─── HTTP helpers ─────────────────────────────────────────────────────────────
-
 var httpClient = &http.Client{
 	Timeout: 4 * time.Second,
-	// Do NOT follow redirects automatically; we handle 307 ourselves so we
-	// can resend the body to the leader.
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	},
@@ -67,8 +51,6 @@ func postJSON(url string, payload interface{}) (map[string]interface{}, int, str
 	_ = json.Unmarshal(raw, &result)
 	return result, resp.StatusCode, loc, nil
 }
-
-// ─── Banking operations ───────────────────────────────────────────────────────
 
 func doTransfer(clientID, receiver, amount int) {
 	payload := fmt.Sprintf("%d %d", receiver, amount)
@@ -94,7 +76,7 @@ func doTransfer(clientID, receiver, amount int) {
 					result["committed_balance"], result["pending_balance"])
 				return
 			case http.StatusTemporaryRedirect:
-				// Follow the redirect to the leader.
+
 				if loc != "" {
 					result2, code2, _, err2 := postJSON(loc, req)
 					if err2 == nil && code2 == http.StatusOK {
@@ -169,8 +151,6 @@ func shortHash(h string) string {
 	}
 	return h
 }
-
-// ─── Main ─────────────────────────────────────────────────────────────────────
 
 func main() {
 	scanner := bufio.NewScanner(os.Stdin)

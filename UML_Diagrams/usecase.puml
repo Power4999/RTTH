@@ -17,54 +17,44 @@ skinparam package {
 skinparam linetype ortho
 left to right direction
 
-' ── Actors ────────────────────────────────────────────────────────────────────
 actor "Banking Client\n(Client CLI)" as Client
 actor "RAFT Leader Node"             as Leader
 actor "RAFT Follower Node"           as Follower
 actor "Network Operator"             as Operator
 actor "Persist Storage\n(disk)"      as Storage
 
-' ── System boundary ───────────────────────────────────────────────────────────
 rectangle "RTTH Distributed Ledger System" {
 
-    ' Banking use cases
     usecase "Submit Transfer\n(POST /transfer)"             as UC_Transfer
     usecase "Check Balance\n(POST /balance)"                as UC_Balance
     usecase "View Blockchain\n(GET /blockchain)"            as UC_ViewChain
 
-    ' RAFT consensus use cases
     usecase "Append Transaction\nto RAFT Log"               as UC_AppendLog
     usecase "Replicate Log\n(AppendEntries RPC)"            as UC_Replicate
     usecase "Commit Log Entry\n(majority quorum)"           as UC_Commit
     usecase "Process AppendEntries\n(POST /appendentries)"  as UC_ProcAE
 
-    ' Election use cases
     usecase "Start Leader Election\n(timeout triggered)"    as UC_Election
     usecase "Request Vote\n(POST /requestvote)"             as UC_ReqVote
     usecase "Grant / Deny Vote"                             as UC_Vote
     usecase "Become Leader\n(majority votes)"               as UC_BecomeLeader
 
-    ' Blockchain use cases
     usecase "Mine Block\n(Proof-of-Work SHA-256)"           as UC_Mine
     usecase "Append Block to Chain"                         as UC_AppendBlock
     usecase "Seed Genesis Chain\n(first_blockchain.txt)"    as UC_Genesis
 
-    ' Persistence use cases
     usecase "Persist State\n(atomic JSON write)"            as UC_Persist
     usecase "Load State\n(on startup)"                      as UC_Load
 
-    ' Admin use cases
     usecase "Simulate Network Partition\n(POST /admin/partition)" as UC_Partition
     usecase "Reset Partition"                               as UC_Reset
     usecase "Forward / Block RPC\n(/forward/:nodeID/*path)" as UC_Forward
 }
 
-' ── Client associations ───────────────────────────────────────────────────────
 Client --> UC_Transfer
 Client --> UC_Balance
 Client --> UC_ViewChain
 
-' ── Leader associations ───────────────────────────────────────────────────────
 Leader --> UC_AppendLog
 Leader --> UC_Replicate
 Leader --> UC_Commit
@@ -72,20 +62,16 @@ Leader --> UC_Mine
 Leader --> UC_AppendBlock
 Leader --> UC_Election
 
-' ── Follower associations ─────────────────────────────────────────────────────
 Follower --> UC_ProcAE
 Follower --> UC_Vote
 Follower --> UC_Election
 
-' ── Storage associations ──────────────────────────────────────────────────────
 Storage --> UC_Persist
 Storage --> UC_Load
 
-' ── Operator associations ────────────────────────────────────────────────────
 Operator --> UC_Partition
 Operator --> UC_Reset
 
-' ── Include relationships ─────────────────────────────────────────────────────
 UC_Transfer   ..> UC_AppendLog    : <<include>>
 UC_AppendLog  ..> UC_Persist      : <<include>>
 UC_Replicate  ..> UC_ProcAE      : <<include>>
@@ -97,7 +83,6 @@ UC_ReqVote    ..> UC_Vote         : <<include>>
 UC_Vote       ..> UC_BecomeLeader : <<extend>>\n[majority reached]
 UC_BecomeLeader ..> UC_Replicate  : <<include>>
 
-' ── Extend / generalise ───────────────────────────────────────────────────────
 UC_Transfer   ..> UC_Forward      : <<include>>\n(via Channel Proxy)
 UC_Replicate  ..> UC_Forward      : <<include>>\n(via Channel Proxy)
 UC_ReqVote    ..> UC_Forward      : <<include>>\n(via Channel Proxy)

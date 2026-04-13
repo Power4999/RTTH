@@ -9,7 +9,6 @@ skinparam timingDiagram {
     LineColor #2C3E50
 }
 
-' Participants
 robust  "Client CLI"       as CLI
 robust  "Channel Proxy"    as Proxy
 robust  "Leader Node"      as Leader
@@ -17,7 +16,6 @@ robust  "Follower A / B"   as Followers
 robust  "Persist (disk)"   as Disk
 robust  "PoW Miner"        as Miner
 
-' ── T=0 : Client sends ────────────────────────────────────────────────────────
 @0
 CLI       is "Building request" #A9D0F5
 Proxy     is Idle
@@ -30,7 +28,6 @@ Miner     is Idle
 CLI       is "Sending POST /transfer" #6EB5FF
 CLI -> Proxy@+5 : HTTP POST /transfer
 
-' ── T=10 : Proxy receives ────────────────────────────────────────────────────
 @10
 CLI       is "Waiting" #E6E6E6
 Proxy     is "Gate check" #FFE5A0
@@ -38,7 +35,6 @@ Proxy     is "Gate check" #FFE5A0
 Proxy     is "Jitter delay (5-30ms)" #FFD966
 Proxy -> Leader@+18 : Forward to :8081
 
-' ── T=30 : Leader receives ────────────────────────────────────────────────────
 @30
 Proxy     is Idle
 Leader    is "Validate & Lock" #A9F5A9
@@ -53,7 +49,6 @@ Disk      is "Atomic write" #F5CBA7
 Disk      is Idle
 Leader -> Followers@+3 : AppendEntries RPCs (parallel)
 
-' ── T=40 : Followers process ─────────────────────────────────────────────────
 @40
 Leader    is "WaitForCommit polling" #E6E6E6
 Followers is "PrevLog check" #D2F5A9
@@ -65,7 +60,6 @@ Followers is "Append + Persist" #58D68D
 Followers is "applyCommitted" #A9F5A9
 Followers -> Leader@+3 : success=true (×2)
 
-' ── T=50 : Leader commits ────────────────────────────────────────────────────
 @50
 Leader    is "advanceCommitIndex\nmajority reached" #58D68D
 Followers is Idle
@@ -76,7 +70,6 @@ Leader    is "applyCommittedLocked\nBlockBuffer += txn" #A9F5A9
 @56
 Leader    is "GetBalance()" #A9F5A9
 
-' ── T=58 : (conditional) block mined ─────────────────────────────────────────
 @58
 Leader    is "BuildBlock (if buffer=3)" #F9E79F
 Leader -> Miner@+1 : BuildBlock(batch)
@@ -97,7 +90,6 @@ Disk      is "Atomic write" #F5CBA7
 @66
 Disk      is Idle
 
-' ── T=67 : Response ──────────────────────────────────────────────────────────
 @67
 Leader    is "Build 200 OK response" #A9F5A9
 Leader -> Proxy@+3 : 200 {committed, balances}
@@ -114,7 +106,6 @@ CLI       is "Display result" #A9D0F5
 @78
 CLI       is Idle
 
-' ── Highlights ────────────────────────────────────────────────────────────────
 highlight 12 to 30  #FFF9E6;line:Orange  : Proxy jitter (≤30ms)
 highlight 30 to 50  #E8F8E8;line:Green   : RAFT replication round-trip
 highlight 59 to 62  #FFF3CD;line:Gold    : PoW mining (<3ms typ.)

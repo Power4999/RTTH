@@ -14,15 +14,12 @@ skinparam interface {
     BorderColor Black
 }
 
-' ── Outer boundary: the Node process ─────────────────────────────────────────
 component "domain.Node (RAFT + Blockchain participant)" as Node {
 
-    ' External ports
     port "HTTP In\n(/requestvote\n/appendentries\n/transfer\n/balance\n/blockchain)" as HttpIn
     port "HTTP Out\n(peer RPCs via\nChannel Proxy)"                                  as HttpOut
     port "Disk I/O\n(node_N_state.json)"                                             as DiskIO
 
-    ' ── Internal parts ────────────────────────────────────────────────────────
     component "RAFT State Machine\n«part»\nstate: Follower|Candidate|Leader\ncurrentTerm, votedFor, commitIndex" as StateMachine {
         component "Election Engine\n«part»\nStartElection()\nProcessVoteRequest()" as ElectionPart
         component "Log Replication Engine\n«part»\nreplicateLog()\nProcessAppendEntries()\nnextIndex[], matchIndex[]" as ReplicaPart
@@ -35,33 +32,26 @@ component "domain.Node (RAFT + Blockchain participant)" as Node {
 
     component "persist.Storage\n«part»\nSave() / Load()\nJSON serialisation\natomic rename" as PersistPart
 
-    ' ── Internal interfaces ────────────────────────────────────────────────────
     interface "LogStore"       as ILogStore
     interface "BlockchainOps\n(BuildBlock\nGetCommittedBalance\nGetPendingBalance)" as IBCOps
     interface "PersistOps"     as IPersist
 }
 
-' ── Delegate: HTTP in → State Machine ────────────────────────────────────────
 HttpIn    ..> StateMachine    : <<delegate>>\nRPC dispatch
 
-' ── Delegate: State Machine → HTTP out ───────────────────────────────────────
 ReplicaPart ..> HttpOut       : AppendEntries / RequestVote\n(X-Sender-ID header)
 ElectionPart ..> HttpOut      : RequestVote
 
-' ── Assembly: State Machine → Blockchain ─────────────────────────────────────
 CommitPart    --( IBCOps      : applyCommitted
 IBCOps        --  BlockchainPart
 
-' ── Assembly: Handler → MemStore ─────────────────────────────────────────────
 StateMachine  --( ILogStore   : legacy append
 ILogStore     --  MemStorePart
 
-' ── Assembly: Node → Persist ─────────────────────────────────────────────────
 StateMachine  --( IPersist    : Persist()
 BlockchainPart --( IPersist
 IPersist      --  PersistPart
 
-' ── Delegate: Persist → Disk ─────────────────────────────────────────────────
 PersistPart   ..> DiskIO      : <<delegate>>\nread / write JSON
 
 note right of StateMachine

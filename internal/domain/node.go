@@ -15,40 +15,34 @@ import (
 	"time"
 )
 
-// Node is a single RAFT participant that also maintains a blockchain.
 type Node struct {
 	Mu sync.Mutex
 
 	Id                  int
 	State               string
 	Store               *store.MemoryStore
-	OtherNodes          map[int]string // nodeId -> channel-proxy URL
+	OtherNodes          map[int]string
 	LeaderId            int
 	LastLeaderTimeStamp int64
 	Timeout             int
 
-	// ── Persistent state (written before responding to RPCs) ──
 	CurrentTerm int
-	VotedFor    map[int]int           // map[term]votedForCandidateId
-	Log         []structs.Transaction // 0-based slice; RAFT indices are 1-based
+	VotedFor    map[int]int
+	Log         []structs.Transaction
 
-	// ── Volatile state (reset on restart) ──
 	CommitIndex int
 	LastApplied int
 
-	// ── Blockchain state (also persisted) ──
-	Blockchain  []structs.Block       // committed, mined blocks
-	BlockBuffer []structs.Transaction // committed txns waiting to fill the next block
+	Blockchain  []structs.Block
+	BlockBuffer []structs.Transaction
 
-	// ── Leader-only volatile state (reset on every election win) ──
 	nextIndex  map[int]int
 	matchIndex map[int]int
 
 	storage *persist.Storage
 }
 
-// NewNode creates a node, loads any previously persisted state, and—on first
-// boot—seeds the blockchain from first_blockchain.txt.
+// NewNode performs node initialization from persisted state and returns a configured node.
 func NewNode(id int, timeoutMs int, dataDir string) (*Node, error) {
 	randomizedTimeout := timeoutMs + rand.Intn(timeoutMs)
 
@@ -62,7 +56,6 @@ func NewNode(id int, timeoutMs int, dataDir string) (*Node, error) {
 		return nil, err
 	}
 
-	// One-time seed from first_blockchain.txt when the chain is empty.
 	if len(saved.Blockchain) == 0 {
 		if chain, loadErr := blockchain.LoadFirstBlockchain("first_blockchain.txt"); loadErr == nil && len(chain) > 0 {
 			saved.Blockchain = chain
@@ -106,8 +99,7 @@ func NewNode(id int, timeoutMs int, dataDir string) (*Node, error) {
 	}, nil
 }
 
-// Persist writes the current durable state to disk.
-// Caller must hold n.Mu.
+// Persist performs durable state persistence and returns an error when persistence fails.
 func (n *Node) Persist() error {
 	return n.storage.Save(persist.State{
 		CurrentTerm: n.CurrentTerm,
@@ -117,8 +109,6 @@ func (n *Node) Persist() error {
 		BlockBuffer: n.BlockBuffer,
 	})
 }
-
-// ── Log helpers ───────────────────────────────────────────────────────────────
 
 func (n *Node) lastLogIndex() int {
 	return len(n.Log)
@@ -131,7 +121,6 @@ func (n *Node) lastLogTerm() int {
 	return n.Log[len(n.Log)-1].Term
 }
 
-// uncommitted returns log entries that have not yet been committed (may be nil).
 func (n *Node) uncommitted() []structs.Transaction {
 	if n.CommitIndex >= len(n.Log) {
 		return nil
@@ -139,10 +128,6 @@ func (n *Node) uncommitted() []structs.Transaction {
 	return n.Log[n.CommitIndex:]
 }
 
-// ── Blockchain apply ──────────────────────────────────────────────────────────
-
-// applyCommittedLocked drains newly committed log entries into blockchain blocks.
-// Must be called with n.Mu held.  Mining typically completes in <1 ms.
 func (n *Node) applyCommittedLocked() {
 	for n.LastApplied < n.CommitIndex {
 		txn := n.Log[n.LastApplied]
@@ -161,8 +146,6 @@ func (n *Node) applyCommittedLocked() {
 	}
 }
 
-// ── Leader helpers ────────────────────────────────────────────────────────────
-
 func (n *Node) initLeaderState() {
 	n.nextIndex = make(map[int]int)
 	n.matchIndex = make(map[int]int)
@@ -172,16 +155,13 @@ func (n *Node) initLeaderState() {
 	}
 }
 
-// advanceCommitIndex advances CommitIndex to the highest index where a
-// majority of nodes have replicated the entry (RAFT §5.3/§5.4).
-// Must be called with n.Mu held.
 func (n *Node) advanceCommitIndex() {
 	majority := (len(n.OtherNodes)+1)/2 + 1
 	for idx := n.CommitIndex + 1; idx <= n.lastLogIndex(); idx++ {
 		if n.Log[idx-1].Term != n.CurrentTerm {
 			continue
 		}
-		count := 1 // self always replicates
+		count := 1
 		for _, mi := range n.matchIndex {
 			if mi >= idx {
 				count++
@@ -194,9 +174,7 @@ func (n *Node) advanceCommitIndex() {
 	n.applyCommittedLocked()
 }
 
-// ── Run loop ──────────────────────────────────────────────────────────────────
-
-// Run is the RAFT state-machine loop.  Start it in a goroutine.
+// Run performs the RAFT state-machine loop and returns when the process stops.
 func (n *Node) Run() {
 	n.Mu.Lock()
 	delete(n.OtherNodes, n.Id)
@@ -225,9 +203,6 @@ func (n *Node) Run() {
 	}
 }
 
-// ── Log replication ───────────────────────────────────────────────────────────
-
-// replicateLog sends AppendEntries to every peer (heartbeat + real entries).
 func (n *Node) replicateLog() {
 	n.Mu.Lock()
 	if n.State != "Leader" {
@@ -345,9 +320,7 @@ func (n *Node) replicateLog() {
 	}
 }
 
-// ── Election ──────────────────────────────────────────────────────────────────
-
-// StartElection runs a full RAFT leader election from this node.
+// StartElection performs a leader election round and returns after election resolution.
 func (n *Node) StartElection() {
 	n.Mu.Lock()
 	n.State = "Candidate"
@@ -457,10 +430,7 @@ func (n *Node) StartElection() {
 	log.Printf("[Node %d] election failed (quorum not reached)", selfID)
 }
 
-// ── Public helpers used by HTTP handlers ──────────────────────────────────────
-
-// ProcessVoteRequest evaluates an incoming VoteReq and returns the response.
-// It acquires the mutex internally; do not call while holding it.
+// ProcessVoteRequest performs RequestVote evaluation and returns the RAFT vote response.
 func (n *Node) ProcessVoteRequest(req structs.VoteReq) (structs.VoteResp, error) {
 	n.Mu.Lock()
 	defer n.Mu.Unlock()
@@ -474,7 +444,6 @@ func (n *Node) ProcessVoteRequest(req structs.VoteReq) (structs.VoteResp, error)
 		n.VotedFor[n.CurrentTerm] = 0
 	}
 
-	// RAFT §5.4: only grant if candidate log is at least as up-to-date.
 	logOK := req.LastLogTerm > n.lastLogTerm() ||
 		(req.LastLogTerm == n.lastLogTerm() && req.LastLogIndex >= n.lastLogIndex())
 	votedFor := n.VotedFor[n.CurrentTerm]
@@ -488,8 +457,7 @@ func (n *Node) ProcessVoteRequest(req structs.VoteReq) (structs.VoteResp, error)
 	return structs.VoteResp{Term: n.CurrentTerm, VoteGranted: grant}, nil
 }
 
-// ProcessAppendEntries handles the full AppendEntries RPC (RAFT §5.3).
-// It acquires the mutex internally; do not call while holding it.
+// ProcessAppendEntries performs AppendEntries processing and returns the RAFT append response.
 func (n *Node) ProcessAppendEntries(req structs.AppendEntriesReq) (structs.AppendEntriesResp, error) {
 	n.Mu.Lock()
 	defer n.Mu.Unlock()
@@ -507,7 +475,6 @@ func (n *Node) ProcessAppendEntries(req structs.AppendEntriesReq) (structs.Appen
 	n.LeaderId = req.LeaderID
 	n.LastLeaderTimeStamp = time.Now().UnixMilli()
 
-	// PrevLog consistency check (§5.3).
 	if req.PrevLogIndex > 0 {
 		if req.PrevLogIndex > len(n.Log) {
 			if changed {
@@ -516,7 +483,7 @@ func (n *Node) ProcessAppendEntries(req structs.AppendEntriesReq) (structs.Appen
 			return structs.AppendEntriesResp{Term: n.CurrentTerm, Success: false}, nil
 		}
 		if n.Log[req.PrevLogIndex-1].Term != req.PrevLogTerm {
-			// Truncate the conflicting suffix and retry.
+
 			n.Log = n.Log[:req.PrevLogIndex-1]
 			if err := n.Persist(); err != nil {
 				return structs.AppendEntriesResp{}, err
@@ -525,7 +492,6 @@ func (n *Node) ProcessAppendEntries(req structs.AppendEntriesReq) (structs.Appen
 		}
 	}
 
-	// Append / overwrite entries.
 	if len(req.Entries) > 0 {
 		for i, entry := range req.Entries {
 			pos := req.PrevLogIndex + i + 1
@@ -541,7 +507,6 @@ func (n *Node) ProcessAppendEntries(req structs.AppendEntriesReq) (structs.Appen
 		changed = true
 	}
 
-	// Advance commitIndex to whatever the leader says.
 	if req.LeaderCommit > n.CommitIndex {
 		newCI := req.LeaderCommit
 		if newCI > len(n.Log) {
@@ -563,9 +528,7 @@ func (n *Node) ProcessAppendEntries(req structs.AppendEntriesReq) (structs.Appen
 	return structs.AppendEntriesResp{Term: n.CurrentTerm, Success: true}, nil
 }
 
-// AppendTransaction appends a new entry to the leader's log and persists it.
-// Returns the 1-based log index of the new entry.
-// Caller must NOT hold n.Mu.
+// AppendTransaction performs leader log appends and returns the assigned log index.
 func (n *Node) AppendTransaction(clientID int, payload string, timestamp int64) (int, error) {
 	n.Mu.Lock()
 	defer n.Mu.Unlock()
@@ -585,7 +548,7 @@ func (n *Node) AppendTransaction(clientID int, payload string, timestamp int64) 
 	return idx, nil
 }
 
-// WaitForCommit blocks until CommitIndex ≥ logIndex or timeout expires.
+// WaitForCommit performs commit waiting for a log index and returns whether commit was observed.
 func (n *Node) WaitForCommit(logIndex int, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -600,8 +563,7 @@ func (n *Node) WaitForCommit(logIndex int, timeout time.Duration) bool {
 	return false
 }
 
-// GetBalance returns the committed and pending balance for clientID.
-// Caller must NOT hold n.Mu.
+// GetBalance performs balance computation and returns committed and pending balances.
 func (n *Node) GetBalance(clientID int) (committed, pending int) {
 	n.Mu.Lock()
 	defer n.Mu.Unlock()
@@ -610,7 +572,7 @@ func (n *Node) GetBalance(clientID int) (committed, pending int) {
 	return
 }
 
-// GetBlockchain returns a deep copy of the current blockchain.
+// GetBlockchain performs blockchain snapshotting and returns a deep copy of the chain.
 func (n *Node) GetBlockchain() []structs.Block {
 	n.Mu.Lock()
 	defer n.Mu.Unlock()

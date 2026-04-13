@@ -1,13 +1,3 @@
-// Package blockchain handles proof-of-work mining, balance calculation,
-// and loading the initial chain from first_blockchain.txt.
-//
-// Payload format for banking transfers stored inside a Transaction:
-//
-//	Payload = "<receiverID> <amount>"   (space-separated integers)
-//	ClientID = senderID
-//
-// A special senderID of 0 means "genesis / bank" and only adds to the
-// receiver — it never reduces any balance.
 package blockchain
 
 import (
@@ -22,11 +12,8 @@ import (
 	"time"
 )
 
-// ─── Proof-of-Work ────────────────────────────────────────────────────────────
-
 const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
 
-// blockDataString serialises the inputs that are hashed for PoW.
 func blockDataString(prevHash string, txns []structs.Transaction, nonce string) string {
 	var sb strings.Builder
 	sb.WriteString(prevHash)
@@ -37,14 +24,11 @@ func blockDataString(prevHash string, txns []structs.Transaction, nonce string) 
 	return sb.String()
 }
 
-// computeHash returns the SHA-256 hex digest of the given inputs.
 func computeHash(prevHash string, txns []structs.Transaction, nonce string) string {
 	h := sha256.Sum256([]byte(blockDataString(prevHash, txns, nonce)))
 	return fmt.Sprintf("%x", h)
 }
 
-// isValidHash returns true when the last hex character of the hash is 0, 1, or 2.
-// This gives ~18.75 % success per attempt — fast to mine, easy to verify.
 func isValidHash(hash string) bool {
 	if len(hash) == 0 {
 		return false
@@ -53,7 +37,6 @@ func isValidHash(hash string) bool {
 	return last == '0' || last == '1' || last == '2'
 }
 
-// mine keeps generating random 8-character nonces until a valid hash is found.
 func mine(prevHash string, txns []structs.Transaction) (nonce, hash string) {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	buf := make([]byte, 8)
@@ -69,7 +52,6 @@ func mine(prevHash string, txns []structs.Transaction) (nonce, hash string) {
 	}
 }
 
-// prevBlockHash returns the hash of the last block, or "0" for an empty chain.
 func prevBlockHash(chain []structs.Block) string {
 	if len(chain) == 0 {
 		return "0"
@@ -77,8 +59,7 @@ func prevBlockHash(chain []structs.Block) string {
 	return chain[len(chain)-1].Hash
 }
 
-// BuildBlock mines a new block for the given transactions and appends it
-// to a copy of the chain, returning the newly mined block.
+// BuildBlock performs proof-of-work block construction and returns the mined block.
 func BuildBlock(chain []structs.Block, txns []structs.Transaction, term int) structs.Block {
 	ph := prevBlockHash(chain)
 	nonce, hash := mine(ph, txns)
@@ -91,11 +72,7 @@ func BuildBlock(chain []structs.Block, txns []structs.Transaction, term int) str
 	}
 }
 
-// ─── Initial chain loader ─────────────────────────────────────────────────────
-
-// LoadFirstBlockchain parses first_blockchain.txt and returns a fully mined
-// blockchain.  File format: one transfer per line ("sender receiver amount"),
-// every 3 lines forming one block.  Lines beginning with '#' are ignored.
+// LoadFirstBlockchain performs seed file loading and returns the initialized blockchain.
 func LoadFirstBlockchain(path string) ([]structs.Block, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -142,11 +119,6 @@ func LoadFirstBlockchain(path string) ([]structs.Block, error) {
 	return chain, nil
 }
 
-// ─── Balance calculation ──────────────────────────────────────────────────────
-
-// parseTransfer extracts (sender, receiver, amount) from a Transaction.
-// The sender is txn.ClientID; the payload is "receiverID amount".
-// Returns ok=false for non-transfer payloads.
 func parseTransfer(txn structs.Transaction) (sender, receiver, amount int, ok bool) {
 	parts := strings.Fields(txn.Payload)
 	if len(parts) < 2 {
@@ -160,7 +132,6 @@ func parseTransfer(txn structs.Transaction) (sender, receiver, amount int, ok bo
 	return txn.ClientID, r, a, true
 }
 
-// applyTxn updates balance for clientID given a single transaction.
 func applyTxn(balance *int, txn structs.Transaction, clientID int) {
 	sender, receiver, amount, ok := parseTransfer(txn)
 	if !ok {
@@ -169,14 +140,13 @@ func applyTxn(balance *int, txn structs.Transaction, clientID int) {
 	if receiver == clientID {
 		*balance += amount
 	}
-	// sender == 0 means genesis credit; never debit the virtual bank.
+
 	if sender == clientID && sender != 0 {
 		*balance -= amount
 	}
 }
 
-// GetCommittedBalance returns the net balance of clientID based solely on
-// the committed blockchain.
+// GetCommittedBalance performs committed-balance calculation and returns the client balance.
 func GetCommittedBalance(chain []structs.Block, clientID int) int {
 	bal := 0
 	for _, block := range chain {
@@ -187,7 +157,7 @@ func GetCommittedBalance(chain []structs.Block, clientID int) int {
 	return bal
 }
 
-// GetPendingBalance returns the balance including uncommitted log entries.
+// GetPendingBalance performs pending-balance calculation and returns the projected balance.
 func GetPendingBalance(chain []structs.Block, uncommitted []structs.Transaction, clientID int) int {
 	bal := GetCommittedBalance(chain, clientID)
 	for _, txn := range uncommitted {
@@ -196,9 +166,7 @@ func GetPendingBalance(chain []structs.Block, uncommitted []structs.Transaction,
 	return bal
 }
 
-// ─── Logging helper ───────────────────────────────────────────────────────────
-
-// PrintChain returns a compact one-line summary of the blockchain for logging.
+// PrintChain performs blockchain formatting and returns a compact printable string.
 func PrintChain(chain []structs.Block) string {
 	if len(chain) == 0 {
 		return "[]"

@@ -17,7 +17,6 @@ skinparam component {
     BorderColor Black
 }
 
-' ── Client workstation ────────────────────────────────────────────────────────
 node "Developer Workstation" as DevBox {
     artifact "cmd/client/main.go\n(Go source)" as ClientSrc
     component "Client CLI\n(interactive banking terminal)" as ClientBin {
@@ -26,17 +25,14 @@ node "Developer Workstation" as DevBox {
     artifact "first_blockchain.txt\n(genesis transactions)" as GenesisFile
 }
 
-' ── Single host running all processes (localhost demo) ───────────────────────
 node "Linux Host\n(localhost)" as Host {
 
-    ' Channel proxy process
     node "Channel Proxy Process\n(cmd/channel/main.go)" as ChannelProc {
         component "Gin Router + Gate Controller" as ChannelApp {
             port "TCP :9000\n/forward/:nodeID/*path\n/admin/partition" as ChannelPort
         }
     }
 
-    ' Node 1
     node "RAFT Node 1\n(cmd/server/main.go)" as Node1Proc {
         component "Node 1 Service\n(Follower | Candidate | Leader)" as Node1App {
             port "TCP :8081" as N1Port
@@ -44,7 +40,6 @@ node "Linux Host\n(localhost)" as Host {
         artifact "data/node1/\nnode_1_state.json" as N1Data
     }
 
-    ' Node 2
     node "RAFT Node 2\n(cmd/server/main.go)" as Node2Proc {
         component "Node 2 Service\n(Follower | Candidate | Leader)" as Node2App {
             port "TCP :8082" as N2Port
@@ -52,7 +47,6 @@ node "Linux Host\n(localhost)" as Host {
         artifact "data/node2/\nnode_2_state.json" as N2Data
     }
 
-    ' Node 3
     node "RAFT Node 3\n(cmd/server/main.go)" as Node3Proc {
         component "Node 3 Service\n(Follower | Candidate | Leader)" as Node3App {
             port "TCP :8083" as N3Port
@@ -61,7 +55,6 @@ node "Linux Host\n(localhost)" as Host {
     }
 }
 
-' ── Communication paths ───────────────────────────────────────────────────────
 ClientBin   ..> ChannelPort : HTTP/JSON\nPOST /forward/N/transfer|balance\nGET  /forward/N/blockchain
 
 ChannelPort ..> N1Port : HTTP/JSON proxied\n(gated + jittered)

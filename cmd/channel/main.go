@@ -1,25 +1,3 @@
-// cmd/channel/main.go
-//
-// The channel acts as an HTTP reverse-proxy between RAFT nodes.  Every
-// server-to-server RPC goes through it so we can simulate network partitions
-// and add random latency without touching the server code.
-//
-// Usage:
-//
-//	go run cmd/channel/main.go [port]   (default port: 9000)
-//
-// Routing:
-//
-//	POST/GET  /forward/{nodeID}/{...path}
-//	          -> http://localhost:808{nodeID}/{...path}
-//
-//	POST      /admin/partition   body: {"partition":"1,2;3"}
-//	          Use semicolons to separate groups; commas to list nodes in a group.
-//	          The minority group's gate is closed.  Send "" or "reset" to reopen all.
-//
-// Interactive stdin:
-//
-//	Type a partition string (e.g. "1,2;3") and press Enter, or "reset".
 package main
 
 import (
@@ -39,28 +17,22 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// nodeAddrs maps node ID -> actual listening address.
 var nodeAddrs = map[int]string{
 	1: "http://localhost:8081",
 	2: "http://localhost:8082",
 	3: "http://localhost:8083",
 }
 
-// gate tracks which nodes are reachable.  A closed gate blocks all
-// messages to AND from that node.
 var (
 	gateMu sync.RWMutex
 	gate   = map[int]bool{1: true, 2: true, 3: true}
 )
 
-// applyPartition parses a partition string like "1,2;3" and closes the
-// gate for nodes in the minority partition.
 func applyPartition(partition string) {
 	partition = strings.TrimSpace(partition)
 	gateMu.Lock()
 	defer gateMu.Unlock()
 
-	// Reset first.
 	for k := range gate {
 		gate[k] = true
 	}
@@ -88,7 +60,6 @@ func applyPartition(partition string) {
 		return
 	}
 
-	// Close the gate for the smallest group (minority partition).
 	minority := 0
 	for i := 1; i < len(groups); i++ {
 		if len(groups[i].ids) < len(groups[minority].ids) {
@@ -101,20 +72,17 @@ func applyPartition(partition string) {
 	}
 }
 
-// isAllowed returns true if both sender and target are in open partitions.
 func isAllowed(senderID, targetID int) bool {
 	gateMu.RLock()
 	defer gateMu.RUnlock()
-	senderOK := senderID <= 0 || gate[senderID]  // clients (id<=0) always allowed
+	senderOK := senderID <= 0 || gate[senderID]
 	return senderOK && gate[targetID]
 }
 
-// randomDelay simulates network jitter (5–30 ms).
 func randomDelay() {
 	time.Sleep(time.Duration(5+rand.Intn(25)) * time.Millisecond)
 }
 
-// forwardHandler proxies a request to the target node.
 func forwardHandler(c *gin.Context) {
 	targetIDStr := c.Param("nodeID")
 	targetID, err := strconv.Atoi(targetIDStr)
@@ -129,7 +97,7 @@ func forwardHandler(c *gin.Context) {
 	}
 
 	senderIDStr := c.GetHeader("X-Sender-ID")
-	senderID, _ := strconv.Atoi(senderIDStr) // 0 if header absent (client request)
+	senderID, _ := strconv.Atoi(senderIDStr)
 
 	if !isAllowed(senderID, targetID) {
 		log.Printf("[channel] BLOCKED %d -> %d (partition active)", senderID, targetID)
@@ -139,8 +107,7 @@ func forwardHandler(c *gin.Context) {
 
 	randomDelay()
 
-	// Build the upstream URL.
-	subPath := c.Param("path") // includes leading "/"
+	subPath := c.Param("path")
 	if subPath == "" {
 		subPath = "/"
 	}
@@ -160,7 +127,6 @@ func forwardHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "build request: " + err.Error()})
 		return
 	}
-	// Copy headers, skip hop-by-hop ones.
 	for k, vv := range c.Request.Header {
 		for _, v := range vv {
 			proxyReq.Header.Add(k, v)
@@ -189,7 +155,6 @@ func forwardHandler(c *gin.Context) {
 	c.Data(resp.StatusCode, ct, respBody)
 }
 
-// adminPartitionHandler allows HTTP-based partition control.
 func adminPartitionHandler(c *gin.Context) {
 	var req struct {
 		Partition string `json:"partition"`
@@ -202,7 +167,6 @@ func adminPartitionHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"applied": req.Partition})
 }
 
-// readStdinLoop reads partition commands interactively from stdin.
 func readStdinLoop() {
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println(`[channel] Partition control ready.
